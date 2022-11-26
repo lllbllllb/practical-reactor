@@ -32,7 +32,7 @@ public class c13_Context extends ContextBase {
      */
     public Mono<Message> messageHandler(String payload) {
         //todo: do your changes withing this method
-        return Mono.just(new Message("set correlation_id from context here", payload));
+        return Mono.deferContextual(contextView -> Mono.just(new Message(contextView.get(HTTP_CORRELATION_ID), payload)));
     }
 
     @Test
@@ -57,7 +57,7 @@ public class c13_Context extends ContextBase {
             return openConnection();
         });
         //todo: change this line only
-        ;
+        repeat = repeat.contextWrite(Context.of(AtomicInteger.class, new AtomicInteger()));
 
         StepVerifier.create(repeat.repeat(4))
                     .thenAwait(Duration.ofSeconds(10))
@@ -79,10 +79,29 @@ public class c13_Context extends ContextBase {
         AtomicInteger pageWithError = new AtomicInteger(); //todo: set this field when error occurs
 
         //todo: start from here
-        Flux<Integer> results = getPage(0)
+            Flux<Integer> results = Mono.deferContextual(contextView -> {
+                var page = contextView.get(AtomicInteger.class).get();
+
+                return getPage(page);
+            })
+                .doOnEach(pageSignal -> {
+                    var pageCounter = pageSignal.getContextView().get(AtomicInteger.class);
+
+                    if (pageSignal.hasError()) {
+                        var page = pageCounter.get();
+
+                        pageWithError.set(page);
+
+                        pageCounter.incrementAndGet();
+                    } else if (pageSignal.isOnNext()) {
+                        pageCounter.incrementAndGet();
+                    }
+                })
+                .onErrorResume(t -> Mono.empty())
                 .flatMapMany(Page::getResult)
                 .repeat(10)
-                .doOnNext(i -> System.out.println("Received: " + i));
+                .doOnNext(i -> System.out.println("Received: " + i))
+                .contextWrite(Context.of(AtomicInteger.class, new AtomicInteger()));
 
 
         //don't change this code
